@@ -70,6 +70,12 @@ export function getBuildUtilsSpec(buildUtilsVersion?: string): string {
   return '@vercel/build-utils';
 }
 
+export function getNpmDeprecationWarnings(stderr: string): string[] {
+  return stderr
+    .split(/\r?\n/)
+    .filter(line => line.includes('npm WARN deprecated'));
+}
+
 function getErrorMessage(err: BonusError, execaMessage: string) {
   if (!err || !('stderr' in err)) {
     return execaMessage;
@@ -118,12 +124,9 @@ async function untracedInstallBuilders(
       stdio: 'pipe',
       reject: true,
     });
-    stderr
-      .split('/\r?\n/')
-      .filter(line => line.includes('npm WARN deprecated'))
-      .forEach(line => {
-        output.warn(line);
-      });
+    getNpmDeprecationWarnings(stderr).forEach(line => {
+      output.warn(line);
+    });
   } catch (err: unknown) {
     if (isError(err)) {
       const execaMessage = err.message;
