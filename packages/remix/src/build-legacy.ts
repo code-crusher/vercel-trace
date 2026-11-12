@@ -35,6 +35,7 @@ import {
   getPathFromRoute,
   getRegExpFromPath,
   getResolvedRouteConfig,
+  getRouteRank,
   isLayoutRoute,
   ResolvedRouteConfig,
   ResolvedNodeRouteConfig,
@@ -577,6 +578,13 @@ module.exports = config;`;
     },
   ];
 
+  // Vercel's routing layer is first-match-wins, whereas Remix ranks routes by
+  // specificity. Collect the dynamic-route rules along with the route's rank
+  // and emit them in ranked order so that an earlier, less specific route
+  // (e.g. a catch-all) cannot shadow a more specific dynamic route that was
+  // built into a different server bundle.
+  const dynamicRouteRules: { rank: number; src: string; dest: string }[] = [];
+
   for (const route of remixRoutes) {
     // Layout routes don't get a function / route added
     if (isLayoutRoute(route.id, remixRoutes)) continue;
@@ -603,12 +611,18 @@ module.exports = config;`;
     // If this is a dynamic route then add a Vercel route
     const re = getRegExpFromPath(rePath);
     if (re) {
-      routes.push({
+      dynamicRouteRules.push({
+        rank: getRouteRank(route, remixConfig.routes),
         src: re.source,
         dest: path,
       });
     }
   }
+
+  // Emit the dynamic-route rules in ranked order (see above). The sort is
+  // stable, so routes with an equal rank keep their definition order.
+  dynamicRouteRules.sort((a, b) => b.rank - a.rank);
+  routes.push(...dynamicRouteRules.map(({ src, dest }) => ({ src, dest })));
 
   // Add a 404 path for not found pages to be server-side rendered by Remix.
   // Use an edge function bundle if one was generated, otherwise use Node.js.

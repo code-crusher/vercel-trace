@@ -1,0 +1,25 @@
+{
+  "probes": [
+    {
+      "path": "/api/items/123/export",
+      "mustContain": "\"servedBy\":\"export route\""
+    },
+    {
+      "path": "/api/items/456/export.data",
+      "mustContain": "\"servedBy\":\"export route\""
+    },
+    {
+      "path": "/api/items/123/export",
+      "method": "POST",
+      "mustContain": "\"servedBy\":\"export route\""
+    },
+    {
+      "path": "/some-page",
+      "mustContain": "page route"
+    },
+    {
+      "path": "/some-page/unknown",
+      "mustContain": "not-found route"
+    }
+  ]
+}

@@ -281,6 +281,80 @@ export function getRegExpFromPath(rePath: string): RegExp | false {
   return keys.length > 0 ? re : false;
 }
 
+// Mirrors the constants used by React Router's `computeScore()` when it
+// ranks route branches (`rankRouteBranches()`), so that Vercel's emitted
+// routing rules match React Router's own matching order.
+const DYNAMIC_SEGMENT_RE = /^:[\w-]+$/;
+const DYNAMIC_SEGMENT_VALUE = 3;
+const INDEX_ROUTE_VALUE = 2;
+const EMPTY_SEGMENT_VALUE = 1;
+const STATIC_SEGMENT_VALUE = 10;
+const SPLAT_PENALTY = -2;
+
+/**
+ * Returns the full path of the route's branch (from the root route down to
+ * the given route), joined the same way React Router does when it flattens
+ * the route tree (`joinPaths()` in `flattenRoutes()`).
+ */
+function getBranchPath(
+  route: RouteManifestEntry,
+  routes: RouteManifest
+): string {
+  // `getRouteIterator()` yields the leaf route first, so reverse the branch
+  // to accumulate paths from the root down.
+  const branch = Array.from(getRouteIterator(route, routes)).reverse();
+  let path = '';
+  for (const currentRoute of branch) {
+    let relativePath = currentRoute.path || '';
+    if (relativePath.startsWith('/')) {
+      // An absolute child path must start with the combined path of all its
+      // parent routes, so the parent portion is stripped before joining.
+      relativePath = relativePath.slice(path.length);
+    }
+    path = `${path}/${relativePath}`.replace(/\/\/+/g, '/');
+  }
+  return path;
+}
+
+/**
+ * Returns the specificity score that React Router assigns to the route's
+ * branch. Higher scores are matched first.
+ *
+ * React Router ranks routes by specificity, so the order in which routes are
+ * defined does not affect which route matches. Vercel's routing layer,
+ * however, is first-match-wins, so the `src` patterns emitted by the builder
+ * must be sorted by this score. Otherwise an earlier, less specific route
+ * (e.g. a catch-all) can shadow a more specific dynamic route that lives in
+ * a different server bundle.
+ */
+export function getRouteRank(
+  route: RouteManifestEntry,
+  routes: RouteManifest
+): number {
+  const segments = getBranchPath(route, routes).split('/');
+  let score = segments.length;
+  if (segments.some(segment => segment === '*')) {
+    score += SPLAT_PENALTY;
+  }
+  if (route.index) {
+    score += INDEX_ROUTE_VALUE;
+  }
+  for (const segment of segments) {
+    if (segment === '*') continue;
+    // React Router explodes optional segments before scoring them, so score
+    // `:lang?` as the dynamic `:lang` branch (its most specific variant).
+    const value = segment.endsWith('?') ? segment.slice(0, -1) : segment;
+    if (DYNAMIC_SEGMENT_RE.test(value)) {
+      score += DYNAMIC_SEGMENT_VALUE;
+    } else if (value === '') {
+      score += EMPTY_SEGMENT_VALUE;
+    } else {
+      score += STATIC_SEGMENT_VALUE;
+    }
+  }
+  return score;
+}
+
 /**
  * React Router v7 single-fetch rewrites loader/action requests from
  * `<path>` to `<path>.data` for client-side navigations. For most routes

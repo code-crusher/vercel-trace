@@ -26,6 +26,7 @@ import {
   getReactRouterDataPaths,
   getRegExpFromPath,
   getPackageVersion,
+  getRouteRank,
   getSkewProtectionRoute,
   hasScript,
   logNftWarnings,
@@ -553,6 +554,15 @@ export const build: BuildV2 = async ({
   const routes: any[] = [];
   let hasReactRouterIndexFunction = false;
 
+  // Vercel's routing layer is first-match-wins, whereas React Router ranks
+  // routes by specificity (so definition order does not matter). Collect the
+  // dynamic-route rules along with React Router's rank for the route, then
+  // emit them in ranked order. Otherwise an earlier, less specific route
+  // (e.g. a catch-all) can shadow a more specific dynamic route that was
+  // built into a different server bundle.
+  const dataRouteRules: { rank: number; src: string; dest: string }[] = [];
+  const dynamicRouteRules: { rank: number; src: string; dest: string }[] = [];
+
   for (const [id, functionId] of Object.entries(
     buildManifest.routeIdToServerBundleId ?? {}
   )) {
@@ -616,25 +626,39 @@ export const build: BuildV2 = async ({
     // If this is a dynamic route then add a Vercel route
     const re = getRegExpFromPath(rePath);
     if (re) {
-      // Push the `.data` variant first so dynamic `.data` requests resolve to
-      // the `<path>.data` entry (preserving the suffix for the single-fetch
-      // handler) instead of matching the non-data rule, which would rewrite
-      // the URL and strip the suffix.
+      const rank = getRouteRank(route, buildManifest.routes);
+      // Emit the `.data` variant so dynamic `.data` requests resolve to the
+      // `<path>.data` entry (preserving the suffix for the single-fetch
+      // handler) instead of matching a non-data rule, which would rewrite the
+      // URL and strip the suffix. Every `.data` rule is emitted before any
+      // non-data rule (see below) so that no route's plain rule can swallow
+      // another route's `.data` URL.
       if (isReactRouter) {
         const reData = getRegExpFromPath(`${rePath}.data`);
         if (reData) {
-          routes.push({
+          dataRouteRules.push({
+            rank,
             src: reData.source,
             dest: `${path}.data`,
           });
         }
       }
-      routes.push({
-        src: re.source,
-        dest: path,
-      });
+      dynamicRouteRules.push({ rank, src: re.source, dest: path });
     }
   }
+
+  // Emit the dynamic-route rules in React Router's route ranking order, so
+  // that the first matching rule on Vercel is the same route React Router
+  // would have selected. `Array.prototype.sort` is stable, so routes with an
+  // equal rank keep their manifest (definition) order.
+  const byRankDesc = (a: { rank: number }, b: { rank: number }) =>
+    b.rank - a.rank;
+  routes.push(
+    ...dataRouteRules.sort(byRankDesc).map(({ src, dest }) => ({ src, dest })),
+    ...dynamicRouteRules
+      .sort(byRankDesc)
+      .map(({ src, dest }) => ({ src, dest }))
+  );
 
   // Pre-filesystem prerender rewrites must come before the filesystem
   // handle so the rewritten path (e.g. `/about.html`) gets resolved by
